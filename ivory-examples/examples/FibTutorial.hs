@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -10,18 +12,14 @@ module FibTutorial where
 import Ivory.Language
 import qualified Ivory.Compile.C.CmdlineFrontend as C (compile)
 
-type family TypeMap (a :: * -> *) (xs :: [*]) :: [*]
-type instance TypeMap t '[] = '[]
-type instance TypeMap t (x ': xs) = t x ': TypeMap t xs
-
 data HList :: [*] -> * where
   HNil :: HList '[]
-  HCons :: a -> HList as -> HList (a ': as)
+  HCons :: Expr a -> HList as -> HList (a ': as)
 
 data Expr a where
   Leaf :: IvoryType a => a -> Expr a
   -- I think we can no longer define an Applicative
-  App :: Def (xs ':-> a) -> HList (TypeMap Expr xs) -> Expr a
+  App :: Def (xs ':-> a) -> HList xs -> Expr a
   ----------------------------------------
   Now :: Declaration a -> Expr a
   (:@) :: Declaration a -> (Int, a) -> Expr a
@@ -42,6 +40,9 @@ myFun = importProc "afun" "funheader.h"
 -- definable, yet uncallable fun (Def ... does not implement IvoryType)
 myHOFun :: Def ('[IString, Def ('[IString] ':-> Sint32)] ':-> Sint32)
 myHOFun = importProc "hofun" "funheader.h"
+-- Apparently, this is how you use high order functions
+invoke :: Def ('[ ProcPtr ('[Sint32] ':-> Sint32), Sint32] ':-> Sint32)
+invoke  = proc "invoke" (\ k n -> body (ret =<< indirect k n))
 
 myApp :: Expr Sint32
 myApp = App myFun (HCons myString (HCons myInt HNil))
@@ -50,7 +51,21 @@ myStream :: Declaration Sint32
 myStream = Output ("myStream", myApp)
 
 runSpec :: [Declaration Sint32] -> Module
-runSpec = undefined
+runSpec decs = let x = concatMap getFunsFromDec decs :: [ModuleDef] in package "hlolaPackage" $ sequence_ x
+
+getFunsFromDec :: Declaration a -> [ModuleDef]
+getFunsFromDec (Input _) = []
+getFunsFromDec (Output (_, expr)) = getFunsFromExpr expr
+
+getFunsFromExpr :: Expr a -> [ModuleDef]
+getFunsFromExpr (Now _) = undefined
+getFunsFromExpr (_ :@ _) = undefined
+getFunsFromExpr (Leaf _) = []
+getFunsFromExpr (App f exprs) = incl f : (concat $ hmap getFunsFromExpr exprs)
+
+hmap :: (forall a0. Expr a0 -> [ModuleDef]) -> HList xs -> [[ModuleDef]]
+hmap _ HNil = [[]]
+hmap f (HCons a1 rest) = f a1 : hmap f rest
 
 -- Original example:
 
