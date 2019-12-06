@@ -10,11 +10,12 @@
 module FibTutorial where
 
 import Ivory.Language
+import Data.String
 import qualified Ivory.Compile.C.CmdlineFrontend as C (compile)
 
 data HList :: [*] -> * where
   HNil :: HList '[]
-  HCons :: Expr a -> HList as -> HList (a ': as)
+  HCons :: (StreamType a, IvoryVar a) => Expr a -> HList as -> HList (a ': as)
 
 data Expr a where
   Leaf :: IvoryType a => a -> Expr a
@@ -27,6 +28,22 @@ data Expr a where
 data Declaration a where
   Input :: String -> Declaration a
   Output :: (String, Expr a) -> Declaration a
+
+class StreamType a where
+  getCurrentValueOf :: Def ('[IString] ':-> a)
+  getDeferredValueOf :: Def ('[IString, Sint32, a] ':-> a)
+
+instance StreamType IString where
+  getCurrentValueOf = getStringCurrentValueOf
+  getDeferredValueOf = getStringDeferredValueOf
+
+instance StreamType Sint32 where
+  getCurrentValueOf = getIntCurrentValueOf
+  getDeferredValueOf = getIntDeferredValueOf
+
+getId :: Declaration a -> String
+getId (Input x) = x
+getId (Output (x,_)) = x
 
 myString :: Expr IString
 myString = Leaf "mystring"
@@ -51,8 +68,33 @@ myStream :: Declaration Sint32
 myStream = Output ("myStream", myApp)
 
 runSpec :: [Declaration Sint32] -> Module
-runSpec decs = let x = concatMap getFunsFromDec decs :: [ModuleDef] in package "hlolaPackage" $ sequence_ x
+runSpec decs = let
+  x = concatMap getFunsFromDec decs
+  in package "hlolaPackage" $ sequence_ x
 
+getIntCurrentValueOf :: Def ('[IString] ':-> Sint32)
+getIntCurrentValueOf = importProc "getIntCurrentValueOf" "valueGetters.h"
+getIntDeferredValueOf :: Def ('[IString, Sint32, Sint32] ':-> Sint32)
+getIntDeferredValueOf = importProc "getIntDeferredValueOf" "valueGetters.h"
+getStringCurrentValueOf :: Def ('[IString] ':-> IString)
+getStringCurrentValueOf = importProc "getStringCurrentValueOf" "valueGetters.h"
+getStringDeferredValueOf :: Def ('[IString, Sint32, IString] ':-> IString)
+getStringDeferredValueOf = importProc "getStringDeferredValueOf" "valueGetters.h"
+
+getBodyFromExpr :: (StreamType a, IvoryVar a) => Expr a -> Ivory eff a
+getBodyFromExpr (Leaf x) = return x
+getBodyFromExpr (App f HNil) = call f
+getBodyFromExpr (App f (HCons x HNil)) = do
+  fx <- getBodyFromExpr x
+  call f fx
+getBodyFromExpr (App f (HCons x (HCons y HNil))) = do
+  fx <- getBodyFromExpr x
+  fy <- getBodyFromExpr y
+  call f fx fy
+getBodyFromExpr (Now x) = call getCurrentValueOf (fromString$getId x)
+getBodyFromExpr (x :@ (i,d)) = call getDeferredValueOf (fromString$getId x) (fromInteger$toInteger i) d
+
+-- We need to keep a state of visited declarations to avoid circularity
 getFunsFromDec :: Declaration a -> [ModuleDef]
 getFunsFromDec (Input _) = []
 getFunsFromDec (Output (_, expr)) = getFunsFromExpr expr
@@ -63,8 +105,8 @@ getFunsFromExpr (_ :@ _) = undefined
 getFunsFromExpr (Leaf _) = []
 getFunsFromExpr (App f exprs) = incl f : (concat $ hmap getFunsFromExpr exprs)
 
-hmap :: (forall a0. Expr a0 -> [ModuleDef]) -> HList xs -> [[ModuleDef]]
-hmap _ HNil = [[]]
+hmap :: (forall a0. Expr a0 -> a) -> HList xs -> [a]
+hmap _ HNil = []
 hmap f (HCons a1 rest) = f a1 : hmap f rest
 
 -- Original example:
