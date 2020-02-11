@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -6,6 +7,8 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module HLolaEx where
 
@@ -47,6 +50,14 @@ getId :: Declaration a -> String
 getId (Input x) = x
 getId (Output (x,_)) = x
 
+-- C struct def
+[ivory|
+struct Foo
+  { field0 :: Stored Uint32
+  ; field1 :: Array 10 (Stored IBool)
+  }
+|]
+
 myString :: Expr IString
 myString = Leaf "mystring"
 
@@ -78,7 +89,8 @@ runSpec decs = let
   mainModuleDef = getMainModule decs
   registerer = incl registerStream
   intdeferred = incl getIntDeferredValueOf
-  in package "hlolaPackage" $ sequence_ (intdeferred:registerer:mainModuleDef:x)
+  structdef = defStruct (Proxy :: Proxy "Foo")
+  in package "hlolaPackage" $ sequence_ (structdef:intdeferred:registerer:mainModuleDef:x)
 
 getIntCurrentValueOf :: Def ('[IString] ':-> Sint32)
 getIntCurrentValueOf = importProc "getIntCurrentValueOf" "valueGetters.h"
