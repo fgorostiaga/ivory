@@ -16,14 +16,32 @@ import Ivory.Language
 import Data.String
 import qualified Ivory.Compile.C.CmdlineFrontend as C (compile)
 
-data HList :: [*] -> * where
-  HNil :: HList '[]
-  HCons :: (StreamType a, IvoryVar a) => Expr a -> HList as -> HList (a ': as)
+data HList f :: [*] -> * where
+  HNil :: HList f '[]
+  HCons :: (StreamType a, IvoryVar a) => f a -> HList f as -> HList f (a ': as)
+
+realmap :: (forall a.(StreamType a, IvoryVar a)=>f a -> g a) -> HList f xs -> HList g xs
+realmap _ HNil = HNil
+realmap daf (HCons fa rest) = HCons (daf fa) (realmap daf rest)
+
+-- getBodyFromExpr :: (StreamType a, IvoryVar a) => Expr a -> Ivory eff a
+dacal :: (StreamType a, IvoryVar a) => Def (xs ':-> a) -> HList (Ivory eff) xs -> Ivory eff a
+dacal f HNil = call f
+dacal f (HCons x HNil) = x>>=call f
+dacal f (HCons x (HCons y HNil)) = do
+  fx <- x
+  fy <- y
+  call f fx fy
+
+-- flattenList :: HList x -> [Dynamic]
+-- flattenList HNil = []
+-- flattenList (HCons a r) = toDyn a:flattenList r
+
 
 data Expr a where
   Leaf :: IvoryType a => a -> Expr a
   -- I think we can no longer define an Applicative
-  App :: Def (xs ':-> a) -> HList xs -> Expr a
+  App :: Def (xs ':-> a) -> HList Expr xs -> Expr a
   ----------------------------------------
   Now :: Declaration a -> Expr a
   (:@) :: Declaration a -> (Int, a) -> Expr a
@@ -103,14 +121,17 @@ getStringDeferredValueOf = importProc "getStringDeferredValueOf" "valueGetters.h
 
 getBodyFromExpr :: (StreamType a, IvoryVar a) => Expr a -> Ivory eff a
 getBodyFromExpr (Leaf x) = return x
-getBodyFromExpr (App f HNil) = call f
-getBodyFromExpr (App f (HCons x HNil)) = do
-  fx <- getBodyFromExpr x
-  call f fx
-getBodyFromExpr (App f (HCons x (HCons y HNil))) = do
-  fx <- getBodyFromExpr x
-  fy <- getBodyFromExpr y
-  call f fx fy
+getBodyFromExpr (App f l) = let
+  dalist = realmap getBodyFromExpr l
+  in dacal f dalist
+-- getBodyFromExpr (App f HNil) = call f
+-- getBodyFromExpr (App f (HCons x HNil)) = do
+--   fx <- getBodyFromExpr x
+--   call f fx
+-- getBodyFromExpr (App f (HCons x (HCons y HNil))) = do
+--   fx <- getBodyFromExpr x
+--   fy <- getBodyFromExpr y
+--   call f fx fy
 getBodyFromExpr (Add e1 e2) = do
   e1b <- getBodyFromExpr e1
   e2b <- getBodyFromExpr e2
@@ -134,7 +155,7 @@ getFunsFromExpr (Leaf _) = []
 getFunsFromExpr (App f exprs) = incl f : (concat $ hmap getFunsFromExpr exprs)
 getFunsFromExpr (Add e1 e2) = getFunsFromExpr e1 ++ getFunsFromExpr e2
 
-hmap :: (forall a0. Expr a0 -> a) -> HList xs -> [a]
+hmap :: (forall a0. Expr a0 -> a) -> HList Expr xs -> [a]
 hmap _ HNil = []
 hmap f (HCons a1 rest) = f a1 : hmap f rest
 
